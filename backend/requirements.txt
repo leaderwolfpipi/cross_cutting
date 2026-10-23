@@ -1,0 +1,19 @@
+# Web / API
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.0
+# Database (SQLite built in; PostgreSQL via psycopg)
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+# Media analysis
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+scenedetect[opencv-headless]==0.6.5
+# Publishing / security
+httpx==0.28.1
+cryptography==44.0.0
+# LLM copywriting (COPYWRITER=llm) talks to OpenAI-compatible APIs through httpx above
+# Tests
+pytest==8.3.4

@@ -1,0 +1,48 @@
+# Production-style stack on Linux: PostgreSQL + API + workers + web console.
+# Render jobs fall back to FFmpeg here; for 剪映 me rendering add a Mac render node pointing at the same
+# DATABASE_URL and DATA_DIR (shared storage) running: python -m app.jobs.worker --queues render
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: seafood
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-seafood}
+      POSTGRES_DB: seafood
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seafood"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build: ../backend
+    env_file: ../backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://seafood:${POSTGRES_PASSWORD:-seafood}@db/seafood
+      DATA_DIR: /data
+    volumes: [media:/data]
+    depends_on: {db: {condition: service_healthy}}
+    restart: unless-stopped
+
+  worker:
+    build: ../backend
+    command: ["python", "-m", "app.jobs.worker", "--queues", "analyze,dedup,publish,render"]
+    env_file: ../backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://seafood:${POSTGRES_PASSWORD:-seafood}@db/seafood
+      DATA_DIR: /data
+    volumes: [media:/data]
+    depends_on: {db: {condition: service_healthy}}
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  frontend:
+    build: ../frontend
+    ports: ["8010:80"]
+    depends_on: [backend]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  media:

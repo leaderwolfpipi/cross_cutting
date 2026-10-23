@@ -1,0 +1,106 @@
+<template>
+  <div>
+    <div class="toolbar">
+      <div class="spacer" />
+      <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建混剪项目</el-button>
+    </div>
+    <el-table :data="items" @row-click="(r) => $router.push(`/projects/${r.id}`)" style="cursor: pointer">
+      <el-table-column prop="name" label="项目" min-width="180" />
+      <el-table-column label="产品" min-width="160">
+        <template #default="{ row }">{{ (row.product.items || []).join('、') || row.product.name }}</template>
+      </el-table-column>
+      <el-table-column label="平台" min-width="180">
+        <template #default="{ row }"><el-tag v-for="p in row.platforms" :key="p" size="small" style="margin-right: 4px">{{ PLATFORMS[p] }}</el-tag></template>
+      </el-table-column>
+      <el-table-column label="素材" width="70"><template #default="{ row }">{{ row.material_ids.length }}</template></el-table-column>
+      <el-table-column label="成片" min-width="200">
+        <template #default="{ row }">
+          <span v-for="(n, k) in row.variant_counts" :key="k" style="margin-right: 6px">
+            <el-tag :type="color(VARIANT_STATUS, k)" size="small">{{ label(VARIANT_STATUS, k) }} {{ n }}</el-tag>
+          </span>
+        </template>
+      </el-table-column>
+      <el-table-column label="创建" width="170"><template #default="{ row }">{{ fmtTime(row.created_at) }}</template></el-table-column>
+    </el-table>
+
+    <el-dialog v-model="visible" title="新建混剪项目" width="680px">
+      <el-form label-width="96px">
+        <el-form-item label="项目名称" required><el-input v-model="form.name" placeholder="如：今日到港 · 帝王蟹专场" /></el-form-item>
+        <el-form-item label="素材">
+          <el-select v-model="form.material_ids" multiple filterable style="width: 100%" placeholder="选择已分析完成的素材">
+            <el-option-group v-for="(list, prod) in grouped" :key="prod" :label="prod">
+              <el-option v-for="m in list" :key="m.id" :label="`${m.filename} (${m.duration}s)`" :value="m.id" />
+            </el-option-group>
+          </el-select>
+          <el-button link type="primary" @click="form.material_ids = ready.map((m) => m.id)">全选 {{ ready.length }} 个</el-button>
+        </el-form-item>
+        <el-form-item label="产品">
+          <el-select v-model="form.product.items" multiple filterable allow-create style="width: 100%" placeholder="出镜产品，如 红帝王蟹" >
+            <el-option v-for="p in productNames" :key="p" :label="p" :value="p" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="卖点">
+          <el-select v-model="form.product.selling_points" multiple filterable allow-create style="width: 100%"
+                     placeholder="回车添加：当天到港 / 鲜活现捞 / 支持加工" />
+        </el-form-item>
+        <el-row>
+          <el-col :span="12"><el-form-item label="门店"><el-input v-model="form.product.store" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="城市"><el-input v-model="form.product.city" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="产地"><el-input v-model="form.product.origin" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="价格"><el-input v-model="form.product.price" placeholder="选填，如 199元/斤" /></el-form-item></el-col>
+        </el-row>
+        <el-form-item label="平台">
+          <el-checkbox-group v-model="form.platforms">
+            <el-checkbox v-for="(n, k) in PLATFORMS" :key="k" :value="k">{{ n }}</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <el-form-item label="叙事模板">
+          <el-select v-model="form.options.templates" multiple clearable style="width: 100%" placeholder="不选 = 按平台自动轮换">
+            <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="声音">
+          <el-radio-group v-model="form.options.audio_mode">
+            <el-radio value="auto">自动（原声/BGM 轮换）</el-radio><el-radio value="original">原声</el-radio><el-radio value="bgm">BGM</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="visible = false">取消</el-button>
+        <el-button type="primary" :disabled="!form.name || !form.material_ids.length" @click="create">创建</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { api } from '@/api'
+import { color, fmtTime, label, PLATFORMS, VARIANT_STATUS } from '@/labels'
+
+const router = useRouter()
+const items = ref([])
+const templates = ref([])
+const materials = ref([])
+const ready = computed(() => materials.value.filter((m) => m.status === 'ready'))
+const grouped = computed(() => ready.value.reduce((acc, m) => ((acc[m.product || '未标注'] ||= []).push(m), acc), {}))
+const productNames = computed(() => [...new Set(ready.value.map((m) => m.product).filter(Boolean))])
+const visible = ref(false)
+const blank = () => ({ name: '', material_ids: [], platforms: Object.keys(PLATFORMS),
+  product: { name: '海鲜', items: [], selling_points: [], store: '', city: '', origin: '', price: '' },
+  options: { templates: [], audio_mode: 'auto' } })
+const form = reactive(blank())
+
+async function openCreate() {
+  Object.assign(form, blank())
+  ;[materials.value, templates.value] = await Promise.all([api.materials(), api.templates()])
+  visible.value = true
+}
+async function create() {
+  const p = await api.createProject(form)
+  visible.value = false
+  router.push(`/projects/${p.id}`)
+}
+onMounted(async () => { items.value = await api.projects() })
+</script>
