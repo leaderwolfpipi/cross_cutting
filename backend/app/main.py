@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import materials, projects, publish, system
+from .api import materials, projects, publish, quotes, system
 from .config import BACKEND_DIR, get_settings
 from .db import init_db
 from .security import require_api_key
@@ -25,7 +25,8 @@ FRONTEND_DIST = BACKEND_DIR.parent / "frontend" / "dist"
 async def lifespan(app: FastAPI):
     s = get_settings()
     init_db()
-    if s.env == "prod" and ("change-me" in s.secret_key or "change-me" in s.api_keys):
+    default_key = type(s).model_fields["api_keys"].default  # documented in README, so never valid in prod
+    if s.env == "prod" and ("change-me" in s.secret_key or "change-me" in s.api_keys or s.api_keys == default_key):
         raise RuntimeError("set SECRET_KEY and API_KEYS before running with ENV=prod")
     pools = []
     if s.embedded_worker:
@@ -60,7 +61,7 @@ def create_app() -> FastAPI:
         return resp
 
     auth = [Depends(require_api_key)]
-    for r in (materials.router, projects.router, publish.router, system.router):
+    for r in (materials.router, projects.router, publish.router, quotes.router, system.router):
         app.include_router(r, dependencies=auth)
     app.include_router(system.public)
     app.include_router(publish.public)

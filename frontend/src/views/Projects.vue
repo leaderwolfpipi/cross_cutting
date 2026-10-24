@@ -47,7 +47,6 @@
           <el-col :span="12"><el-form-item label="门店"><el-input v-model="form.product.store" /></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="城市"><el-input v-model="form.product.city" /></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="产地"><el-input v-model="form.product.origin" /></el-form-item></el-col>
-          <el-col :span="12"><el-form-item label="价格"><el-input v-model="form.product.price" placeholder="选填，如 199元/斤" /></el-form-item></el-col>
         </el-row>
         <el-form-item label="平台">
           <el-checkbox-group v-model="form.platforms">
@@ -64,10 +63,29 @@
             <el-radio value="auto">自动（原声/BGM 轮换）</el-radio><el-radio value="original">原声</el-radio><el-radio value="bgm">BGM</el-radio>
           </el-radio-group>
         </el-form-item>
+        <el-form-item label="核实报价">
+          <el-select v-model="form.options.quote_sheet_id" clearable style="width: 100%" placeholder="可选：关联当天已确认报价，生成带价格的混剪" @change="loadQuoteSheet">
+            <el-option v-for="s in availableSheets" :key="s.id" :value="s.id" :label="`${s.quote_date} · ${s.supplier}`" />
+          </el-select>
+        </el-form-item>
+        <template v-if="form.options.quote_sheet_id">
+          <el-form-item label="报价行" required>
+            <el-select v-model="form.options.quote_entry_id" filterable style="width: 100%" placeholder="选择与素材商品一致的单一规格报价">
+              <el-option v-for="e in matchedQuoteEntries" :key="e.id" :value="e.id"
+                         :label="`${e.product} · ${e.spec} · ${e.price} ${selectedQuoteSheet?.unit || ''}`" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="报价位置">
+            <el-radio-group v-model="form.options.quote_placement">
+              <el-radio value="auto">按叙事轮换</el-radio><el-radio value="early">前段展示</el-radio><el-radio value="late">前段预告、后段详示</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <div class="muted" style="margin: -8px 0 16px 96px">仅能使用当天已核实报价；过期或变更后会阻止发布。</div>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="visible = false">取消</el-button>
-        <el-button type="primary" :disabled="!form.name || !form.material_ids.length" @click="create">创建</el-button>
+        <el-button type="primary" :disabled="!form.name || !form.material_ids.length || (form.options.quote_sheet_id && !form.options.quote_entry_id)" @click="create">创建</el-button>
       </template>
     </el-dialog>
   </div>
@@ -83,19 +101,31 @@ const router = useRouter()
 const items = ref([])
 const templates = ref([])
 const materials = ref([])
+const quoteSheets = ref([])
+const selectedQuoteSheet = ref(null)
+const availableSheets = computed(() => quoteSheets.value.filter((s) => s.current && s.confirmed_by && !s.review_count))
 const ready = computed(() => materials.value.filter((m) => m.status === 'ready'))
 const grouped = computed(() => ready.value.reduce((acc, m) => ((acc[m.product || '未标注'] ||= []).push(m), acc), {}))
 const productNames = computed(() => [...new Set(ready.value.map((m) => m.product).filter(Boolean))])
+const matchedQuoteEntries = computed(() => {
+  const products = new Set(ready.value.filter((m) => form.material_ids.includes(m.id)).map((m) => m.product))
+  return (selectedQuoteSheet.value?.entries || []).filter((e) => e.status === 'ready' && !e.qualifier && products.has(e.product))
+})
 const visible = ref(false)
 const blank = () => ({ name: '', material_ids: [], platforms: Object.keys(PLATFORMS),
   product: { name: '海鲜', items: [], selling_points: [], store: '', city: '', origin: '', price: '' },
-  options: { templates: [], audio_mode: 'auto' } })
+  options: { templates: [], audio_mode: 'auto', quote_sheet_id: '', quote_entry_id: '', quote_placement: 'auto' } })
 const form = reactive(blank())
 
 async function openCreate() {
   Object.assign(form, blank())
-  ;[materials.value, templates.value] = await Promise.all([api.materials(), api.templates()])
+  selectedQuoteSheet.value = null
+  ;[materials.value, templates.value, quoteSheets.value] = await Promise.all([api.materials(), api.templates(), api.quoteSheets()])
   visible.value = true
+}
+async function loadQuoteSheet(id) {
+  form.options.quote_entry_id = ''
+  selectedQuoteSheet.value = id ? await api.quoteSheet(id) : null
 }
 async function create() {
   const p = await api.createProject(form)

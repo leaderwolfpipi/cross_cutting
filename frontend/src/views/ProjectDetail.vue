@@ -30,7 +30,7 @@
         </div>
         <div class="meta">
           <div class="title" :title="v.copy?.title">{{ v.copy?.title || '…' }}</div>
-          <div class="muted">{{ templateName(v.template_id) }} · {{ v.duration || '-' }}s · 相似度 {{ pct(v.dedup_score) }}</div>
+          <div class="muted">{{ templateName(v.template_id) }} · {{ v.style?.look || '原色' }} · {{ rhythmName(v.style?.rhythm) }} · {{ v.duration || '-' }}s · 相似度 {{ pct(v.dedup_score) }}</div>
           <div v-if="v.error" class="err">{{ v.error }}</div>
         </div>
       </el-card>
@@ -47,13 +47,15 @@
           <div v-if="cur.editor_project_path" class="muted">剪映 me 工程：{{ cur.editor_project_path }}（可用 App 打开精修）</div>
         </div>
         <div class="right">
+          <el-alert v-if="cur.plan?.quote" type="info" :closable="false" style="margin-bottom:12px"
+                    :title="`已关联 ${cur.plan.quote.quote_date} ${cur.plan.quote.product} ${cur.plan.quote.spec} 参考报价；价格变动后需重新生成。`" />
           <el-form label-position="top">
             <el-form-item label="标题"><el-input v-model="copy.title" maxlength="55" show-word-limit /></el-form-item>
             <el-form-item label="正文"><el-input v-model="copy.description" type="textarea" :rows="3" /></el-form-item>
             <el-form-item label="话题">
               <el-select v-model="copy.hashtags" multiple filterable allow-create style="width: 100%" />
             </el-form-item>
-            <el-button @click="saveCopy">保存文案</el-button>
+            <el-button :disabled="!!cur.plan?.quote" @click="saveCopy">保存文案</el-button>
             <el-button type="success" :disabled="!['passed', 'review'].includes(cur.status)" @click="approve">批准发布</el-button>
             <el-button type="danger" plain :disabled="['discarded', 'approved'].includes(cur.status)" @click="discard">作废</el-button>
             <el-button :disabled="!cur.video_url" @click="recheck">重新查重</el-button>
@@ -126,6 +128,7 @@ const gen = reactive({ platforms: [], count: 2 })
 const busyStates = ['queued', 'planning', 'rendering', 'checking']
 const shown = computed(() => (p.value?.variants || []).filter((v) => tab.value === 'all' || v.platform === tab.value).slice().reverse())
 const templateName = (id) => templates.value.find((t) => t.id === id)?.name || id || '-'
+const rhythmName = (id) => ({ clean: '留白', accent: '轻转场', brisk: '利落' })[id] || '标准节奏'
 
 async function load() {
   p.value = await api.project(route.params.id)

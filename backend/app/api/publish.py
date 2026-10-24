@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 
 from ..config import PLATFORM_SPECS, get_settings
 from ..db import get_db, utcnow
-from ..models import Account, Delivery, OAuthState, PublishBatch, Variant
+from ..models import Account, Delivery, OAuthState, Project, PublishBatch, Variant
 from ..publish import orchestrator as O
 from ..publish import registry
 from ..publish.base import PublishError, Tokens
+from ..quotes.service import carries_quote
 from ..security import random_state, require_api_key, signed_page_token
 from . import serializers as S
 
@@ -156,11 +157,22 @@ def auto_targets(db: Session, project_id: str, platforms: list[str] | None) -> l
     """一键: for every active account on the requested platforms, the newest publishable variant of the project that
     this account hasn't received yet."""
     targets = []
+    project = db.get(Project, project_id)
+    # Only the all-spec series projects carry a selection; mixed projects may link a quote row too.
+    quote_series = bool(project and (project.options or {}).get("quote_selection"))
     for a in db.scalars(select(Account).where(Account.status == "active")):
         if platforms and a.platform not in platforms:
             continue
         sent = set(db.scalars(select(Delivery.variant_id).where(Delivery.account_id == a.id,
                                                                Delivery.state.notin_(("failed", "canceled")))))
+        if quote_series:
+            variants = db.scalars(select(Variant).where(Variant.project_id == project_id,
+                                                         Variant.platform == a.platform,
+                                                         Variant.template_id == "quote_series",
+                                                         Variant.status == "approved")
+                                  .order_by(Variant.seq)).all()
+            targets.extend({"variant_id": v.id, "account_id": a.id} for v in variants if v.id not in sent)
+            continue
         taken = {t["variant_id"] for t in targets}
         v = db.scalar(select(Variant).where(Variant.project_id == project_id, Variant.platform == a.platform,
                                             Variant.status.in_(("passed", "approved")),
@@ -224,18 +236,30 @@ def get_delivery(did: str, db: Session = Depends(get_db)):
     v = db.get(Variant, d.variant_id)
     out["variant"] = S.variant(v)
     if d.mode == "assisted":
-        out["handoff"] = handoff_info(d, v)
+        out["handoff"] = handoff_info(db, d, v)
     return out
 
 
-def handoff_info(d: Delivery, v: Variant) -> dict:
+def handoff_info(db: Session, d: Delivery, v: Variant) -> dict:
     s = get_settings()
     token = signed_page_token("delivery", d.id)
+    blocked_reason = ""
+    ttl = 7 * 86400
+    if carries_quote(v.plan):
+        from ..quotes.service import validate_variant
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        blocked_reason = validate_variant(db, v)
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        ttl = max(1, int((midnight - now).total_seconds()))
     return {"creator_url": registry.ASSISTED_URLS.get(d.platform, ""),
-            "mobile_url": f"{s.public_base_url.rstrip('/')}/m/deliveries/{d.id}?t={token}",
-            "video_url": S.signed_media_url(v.file_path, 7 * 86400, absolute=True),
-            "cover_url": S.signed_media_url(v.cover_path, 7 * 86400, absolute=True),
-            "title": d.title, "text": d.text, "hashtags": (v.copywriting or {}).get("hashtags", [])}
+            "mobile_url": "" if blocked_reason else f"{s.public_base_url.rstrip('/')}/m/deliveries/{d.id}?t={token}",
+            "video_url": "" if blocked_reason else S.signed_media_url(v.file_path, ttl, absolute=True),
+            "cover_url": "" if blocked_reason else S.signed_media_url(v.cover_path, ttl, absolute=True),
+            "blocked_reason": blocked_reason, "title": d.title, "text": d.text,
+            "hashtags": (v.copywriting or {}).get("hashtags", [])}
 
 
 class ConfirmReq(BaseModel):

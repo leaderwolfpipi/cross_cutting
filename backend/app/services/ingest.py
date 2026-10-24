@@ -41,14 +41,53 @@ def store_upload(tmp: Path, original_name: str, kind: str) -> Path:
     return dst
 
 
+def locate_path(path: Path) -> Path:
+    """Return `path` when it exists. When a parent folder was renamed with only a case change, follow that name."""
+    if path.exists():
+        return path
+    parts = path.parts
+    if len(parts) < 2:
+        return path
+    cur = Path(parts[0])
+    for part in parts[1:]:
+        direct = cur / part
+        if direct.exists():
+            cur = direct
+            continue
+        if not cur.is_dir():
+            return path
+        try:
+            children = list(cur.iterdir())
+        except OSError:
+            return path
+        folded = part.casefold()
+        matches = [child for child in children if child.name.casefold() == folded]
+        # On case-sensitive filesystems both "Examples" and "examples" can exist.
+        # Picking the first directory entry could silently import the wrong footage.
+        if len(matches) != 1:
+            return path
+        cur = matches[0]
+    return cur
+
+
 def material_file(m: Material) -> Path:
-    p = Path(m.storage_path)
-    return p if p.is_absolute() else get_settings().abs(m.storage_path)
+    raw = Path(m.storage_path)
+    path = raw if raw.is_absolute() else get_settings().abs(m.storage_path)
+    if path.is_file():
+        return path
+    found = locate_path(path)
+    if found.is_file():
+        if raw.is_absolute() and str(found) != str(path):
+            m.storage_path = str(found)
+        return found
+    return path
 
 
 def analyze_material(db: Session, material: Material, progress=None) -> None:
     s = get_settings()
     src = material_file(material)
+    if not src.is_file():
+        raise F.MediaError(f"素材文件不存在：{src}")
     material.status, material.error = "analyzing", ""
     db.commit()
     info = F.probe(src)

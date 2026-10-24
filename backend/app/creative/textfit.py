@@ -11,6 +11,8 @@ NO_LINE_START = set("，。！？、；：,.!?;:）)】」』…~～")
 
 
 def char_em(ch: str) -> float:
+    if ch in "〖〗":  # emphasis markup, rendered as a colour change
+        return 0.0
     if ch == " ":
         return 0.3
     if unicodedata.east_asian_width(ch) in ("W", "F"):

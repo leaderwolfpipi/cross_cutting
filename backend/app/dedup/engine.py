@@ -83,12 +83,15 @@ def usage_ledger(db: Session, platform: str) -> provenance.UsageLedger:
 
 
 def plan_overlap(db: Session, plan: dict, platform: str, exclude_id: str = "") -> dict:
-    """L1 check before rendering: worst pairwise source reuse and library reuse against in-scope history."""
+    """L1 check before rendering: whole-video, opening and library source reuse."""
     hist = history_variants(db, platform, exclude_id)
     pairs = sorted(((provenance.reuse(plan, provenance.footprint(v.plan)), v.id) for v in hist), reverse=True)
+    openings = sorted(((provenance.opening_reuse(plan, v.plan), v.id) for v in hist), reverse=True)
     library = provenance.reuse(plan, provenance.union_footprint(provenance.footprint(v.plan) for v in hist))
     worst = pairs[0] if pairs else (0.0, "")
+    first = openings[0] if openings else (0.0, "")
     return {"max_pair": round(worst[0], 4), "max_pair_variant": worst[1], "library": round(library, 4),
+            "max_opening": round(first[0], 4), "max_opening_variant": first[1],
             "compared": len(hist)}
 
 

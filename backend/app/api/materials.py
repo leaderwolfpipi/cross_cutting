@@ -11,10 +11,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..config import PLATFORM_SPECS, get_settings
+from ..creative import vision
 from ..db import get_db
 from ..jobs import queue
 from ..models import BgmTrack, Fingerprint, HistoryItem, Material, Variant
-from ..services.ingest import VIDEO_EXT, sha256_file, store_upload
+from ..services.ingest import VIDEO_EXT, locate_path, sha256_file, store_upload
 from . import serializers as S
 
 router = APIRouter(tags=["素材"])
@@ -79,12 +80,12 @@ class ImportReq(BaseModel):
 @router.post("/api/materials/import")
 def import_materials(req: ImportReq, db: Session = Depends(get_db)):
     """Register files that already sit on the server (NAS / camera dumps) without copying. Only IMPORT_ROOTS."""
-    roots = get_settings().import_root_paths
+    roots = [locate_path(r).resolve() for r in get_settings().import_root_paths]
     if not roots:
         raise HTTPException(403, "server-side import is disabled (set IMPORT_ROOTS)")
     files: list[Path] = []
     for raw in req.paths:
-        p = Path(raw).expanduser().resolve()
+        p = locate_path(Path(raw).expanduser()).resolve()
         if not any(p.is_relative_to(r) for r in roots):
             raise HTTPException(403, f"{raw} is outside IMPORT_ROOTS")
         if p.is_dir():
@@ -153,6 +154,29 @@ def reanalyze(mid: str, db: Session = Depends(get_db)):
     queue.enqueue(db, "analyze", "analyze_material", {"material_id": m.id}, dedupe_key=f"mat:{m.id}", commit=False)
     db.commit()
     return S.material(m)
+
+
+class DescribeReq(BaseModel):
+    material_ids: list[str] | None = None  # omitted = every ready material without current notes
+    force: bool = False
+
+
+@router.post("/api/materials/describe")
+def describe_materials(req: DescribeReq, db: Session = Depends(get_db)):
+    """Queue vision shot notes (used to ground copy). Backfills materials analysed before notes existed."""
+    if not vision.configured():
+        raise HTTPException(409, "视觉模型未配置：请设置 AGENT_VISION_MODEL_*")
+    q = select(Material).where(Material.status == "ready")
+    if req.material_ids is not None:
+        q = q.where(Material.id.in_(req.material_ids or [""]))
+    queued = []
+    for m in db.scalars(q):
+        if req.force or not vision.current(m.analysis) or vision.current(m.analysis).get("errors"):
+            if queue.enqueue(db, "analyze", "describe_material", {"material_id": m.id, "force": req.force},
+                             dedupe_key=f"vision:{m.id}", max_attempts=3, commit=False):
+                queued.append(m.id)
+    db.commit()
+    return {"queued": queued}
 
 
 @router.delete("/api/materials/{mid}")

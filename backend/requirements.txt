@@ -10,6 +10,7 @@ psycopg[binary]==3.2.3
 # Media analysis
 numpy==1.26.4
 opencv-python-headless==4.10.0.84
+Pillow==12.3.0
 scenedetect[opencv-headless]==0.6.5
 # Publishing / security
 httpx==0.28.1

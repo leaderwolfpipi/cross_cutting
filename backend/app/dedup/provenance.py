@@ -53,6 +53,26 @@ def footprint(plan: dict) -> dict[str, list[Interval]]:
     return {g: merge(iv) for g, iv in groups.items()}
 
 
+def opening(plan: dict, seconds: float = 3.0) -> dict:
+    """The source intervals seen in the first `seconds` of an edit."""
+    remaining, clips = seconds, []
+    for c in plan_clips(plan):
+        duration = float(c.get("out_duration") or 0)
+        if duration <= 0:
+            continue
+        taken = min(remaining, duration)
+        end = c["src_in"] + (c["src_out"] - c["src_in"]) * taken / duration
+        clips.append({**c, "src_out": end, "out_duration": taken})
+        remaining -= taken
+        if remaining <= 1e-6:
+            break
+    return {"clips": clips}
+
+
+def opening_reuse(plan: dict, other: dict, seconds: float = 3.0) -> float:
+    return reuse(opening(plan, seconds), footprint(opening(other, seconds)))
+
+
 def reuse(plan: dict, other_footprint: dict[str, list[Interval]]) -> float:
     dur = plan_duration(plan)
     if dur <= 0:

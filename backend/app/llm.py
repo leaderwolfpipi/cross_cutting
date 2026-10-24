@@ -36,9 +36,11 @@ class ChatModel:
     max_attempts: int = 3
 
     def chat(self, messages: list[dict], *, json_mode: bool = False, max_tokens: int = 4096,
-             timeout: float = 60.0) -> str:
+             timeout: float = 60.0, temperature: float | None = None) -> str:
         """Returns the assistant text. Retries rate limits / 5xx / network errors; raises LLMError otherwise."""
         body: dict = {"model": self.name, "messages": messages, "max_tokens": max_tokens}
+        if temperature is not None:
+            body["temperature"] = temperature
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         url = f"{self.base_url.rstrip('/')}/chat/completions"

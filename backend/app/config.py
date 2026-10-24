@@ -21,7 +21,8 @@ PLATFORM_SPECS: dict[str, dict] = {
     "channels": {"name": "视频号", "width": 1080, "height": 1920, "fps": 30, "target_duration": (20.0, 40.0),
                  "max_duration": 3600, "min_duration": 3, "max_size_mb": 20480, "title_max": 16, "text_max": 1000,
                  "tags_max": 5, "mode": "assisted"},
-    "xiaohongshu": {"name": "小红书", "width": 1080, "height": 1440, "fps": 30, "target_duration": (18.0, 35.0),
+    "xiaohongshu": {"name": "小红书", "width": 1080, "height": 1920, "cover_width": 1080,
+                    "cover_height": 1920, "fps": 30, "target_duration": (18.0, 35.0),
                     "max_duration": 900, "min_duration": 3, "max_size_mb": 20480, "title_max": 20, "text_max": 1000,
                     "tags_max": 10, "mode": "assisted"},
 }
@@ -35,7 +36,7 @@ class Settings(BaseSettings):
     env: str = "dev"
     data_dir: Path = BACKEND_DIR / "data"
     database_url: str = ""  # default: sqlite file under data_dir
-    api_keys: str = "dev-key-change-me"  # comma separated; sent as X-API-Key
+    api_keys: str = "louhaokey"  # comma separated; sent as X-API-Key
     secret_key: str = "dev-secret-change-me-0123456789abcdef"  # HMAC for signed media URLs
     token_encryption_key: str = ""  # Fernet key (urlsafe base64, 32 bytes); derived from secret_key when empty
     public_base_url: str = "http://127.0.0.1:8010"  # used in signed links and the mobile hand-off page
@@ -58,9 +59,15 @@ class Settings(BaseSettings):
     jianying_mcp_cmd: str = ""  # e.g. /path/jianying-me/scripts/mcp.sh or /Applications/JianyingMe.app/Contents/MacOS/JianyingMe --mcp
     jianying_timeout_s: int = 1800
     max_plan_attempts: int = 8
+    quote_outro_required: bool = True  # every mixed video ends with today's confirmed quote cards
+    quote_outro_max_pages: int = 6  # cards of the products seen in the video; ~3 s each
+    quote_outro_page_s: float = 2.8
 
     # ------------------------------------------------------------------ copywriting
     copywriter: str = "template"  # template | llm (the text model below)
+    vision_describe: bool = True  # describe every shot with the vision model after analysis (needs AGENT_VISION_*)
+    vision_frames_per_shot: int = 3
+    vision_concurrency: int = 3
 
     # ------------------------------------------------------------------ models (OpenAI-compatible, see app/llm.py)
     agent_model_provider: str = "deepseek"  # deepseek uses https://api.deepseek.com/v1 unless base_url is set
@@ -73,7 +80,7 @@ class Settings(BaseSettings):
     agent_vision_model_api_key: str = ""
 
     # ------------------------------------------------------------------ dedup
-    dedup_scope: str = "platform"  # platform | global
+    dedup_scope: str = "global"  # global | platform
     dedup_hamming: int = 14  # validated on examples: 0 false positives vs other clips, recall on speed/crop/grade
     dedup_reject_content: float = 0.60
     dedup_reject_score: float = 0.70
@@ -81,6 +88,8 @@ class Settings(BaseSettings):
     dedup_review_score: float = 0.45
     dedup_review_library: float = 0.85
     plan_max_pair_overlap: float = 0.35  # L1 gate before rendering (pairwise source reuse)
+    plan_max_opening_overlap: float = 0.35  # reuse in the first three seconds
+    plan_max_library_overlap: float = 0.75  # avoid recombining mostly-seen shots
     freshness_half_life_days: float = 14.0
 
     # ------------------------------------------------------------------ publishing

@@ -9,9 +9,9 @@ command -v ffmpeg >/dev/null || { echo "FFmpeg is required (macOS: brew install 
 cd "$ROOT/backend"
 if [ ! -d .venv ]; then
   python3.11 -m venv .venv
-  .venv/bin/pip install -q --upgrade pip
+  .venv/bin/python -m pip install -q --upgrade pip
 fi
-.venv/bin/pip install -q -r requirements.txt
+.venv/bin/python -m pip install -q -r requirements.txt
 
 if [ ! -d "$ROOT/frontend/dist" ]; then
   (cd "$ROOT/frontend" && npm install --no-audit --no-fund && npm run build)
@@ -22,5 +22,5 @@ if [ -z "${JIANYING_MCP_CMD:-}" ] && [ -x "$ROOT/../../jianying-me/scripts/mcp.s
   export JIANYING_MCP_CMD="$(cd "$ROOT/../../jianying-me" && pwd)/scripts/mcp.sh"
 fi
 export EMBEDDED_WORKER="${EMBEDDED_WORKER:-true}"
-echo "→ http://127.0.0.1:$PORT  (API key: ${API_KEYS:-dev-key-change-me}; set API_KEYS / SECRET_KEY in backend/.env for real use)"
-exec .venv/bin/uvicorn app.main:app --host "${HOST:-127.0.0.1}" --port "$PORT"
+echo "→ http://127.0.0.1:$PORT  (API key: ${API_KEYS:-louhaokey}; set API_KEYS / SECRET_KEY in backend/.env for real use)"
+exec .venv/bin/python -m uvicorn app.main:app --host "${HOST:-127.0.0.1}" --port "$PORT"

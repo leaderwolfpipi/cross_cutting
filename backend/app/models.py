@@ -126,6 +126,23 @@ class Project(TimestampMixin, Base):
                                                    order_by="Variant.created_at")
 
 
+class QuoteSheet(TimestampMixin, Base):
+    """Immutable source text plus an editable, versioned review of its parsed prices."""
+
+    __tablename__ = "quote_sheets"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    supplier: Mapped[str] = mapped_column(String(256))
+    quote_date: Mapped[str] = mapped_column(String(10), index=True)
+    unit: Mapped[str] = mapped_column(String(32), default="元/斤")
+    source_text: Mapped[str] = mapped_column(Text)
+    entries: Mapped[list[Any]] = mapped_column(default=list)
+    corrections: Mapped[list[Any]] = mapped_column(default=list)
+    review_note: Mapped[str] = mapped_column(Text, default="")
+    confirmed_by: Mapped[str] = mapped_column(String(128), default="")
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class Variant(TimestampMixin, Base):
     __tablename__ = "variants"
 

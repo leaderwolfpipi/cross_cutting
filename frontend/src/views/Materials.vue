@@ -8,6 +8,7 @@
         <el-option v-for="(v, k) in MATERIAL_STATUS" :key="k" :label="v[0]" :value="k" />
       </el-select>
       <div class="spacer" />
+      <el-button title="让视觉模型逐镜头记录画面，文案据此生成" @click="describeAll">补全视觉场记</el-button>
       <el-button @click="importVisible = true"><el-icon><FolderOpened /></el-icon>服务器目录导入</el-button>
       <el-button type="primary" @click="uploadVisible = true"><el-icon><Upload /></el-icon>上传素材</el-button>
     </div>
@@ -137,6 +138,10 @@ async function save() { await api.patchMaterial(cur.value.id, edit); ElMessage.s
 async function toggleBlack() {
   await api.patchMaterial(cur.value.id, { blacklisted: cur.value.status !== 'blacklisted' })
   cur.value = await api.material(cur.value.id); load()
+}
+async function describeAll() {
+  const r = await api.describeMaterials()
+  ElMessage.success(r.queued.length ? `已排队 ${r.queued.length} 个素材的视觉场记` : '所有素材的视觉场记都是最新的')
 }
 async function reanalyze() { await api.reanalyze(cur.value.id); ElMessage.success('已排队重新分析'); load() }
 async function remove() {

@@ -22,7 +22,7 @@
         <template #default="{ row }"><el-progress :percentage="Math.round(row.progress * 100)" :stroke-width="6" /></template>
       </el-table-column>
       <el-table-column label="信息" min-width="240">
-        <template #default="{ row }"><span>{{ row.message }}</span><div v-if="row.last_error" class="err">{{ row.last_error.split('\n')[0] }}</div></template>
+        <template #default="{ row }"><span>{{ row.message }}</span><div v-if="row.last_error" class="err">{{ row.last_error }}</div></template>
       </el-table-column>
       <el-table-column prop="attempts" label="次数" width="60" />
       <el-table-column label="计划执行" width="170"><template #default="{ row }">{{ fmtTime(row.run_after) }}</template></el-table-column>
@@ -49,5 +49,5 @@ onUnmounted(() => clearInterval(t))
 </script>
 
 <style scoped>
-.err { color: #f53f3f; font-size: 12px; }
+.err { color: #f53f3f; font-size: 12px; white-space: normal; word-break: break-all; line-height: 1.4; }
 </style>

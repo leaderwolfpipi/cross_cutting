@@ -40,6 +40,7 @@ export const api = {
   info: () => http.get('/api/system/info'),
   dashboard: () => http.get('/api/dashboard'),
   jobs: (params) => http.get('/api/jobs', { params }),
+  job: (id) => http.get(`/api/jobs/${id}`),
   retryJob: (id) => http.post(`/api/jobs/${id}/retry`),
 
   materials: (params) => http.get('/api/materials', { params }),
@@ -54,6 +55,7 @@ export const api = {
   importMaterials: (body) => http.post('/api/materials/import', body),
   patchMaterial: (id, body) => http.patch(`/api/materials/${id}`, body),
   reanalyze: (id) => http.post(`/api/materials/${id}/reanalyze`),
+  describeMaterials: (body = {}) => http.post('/api/materials/describe', body),
   deleteMaterial: (id) => http.delete(`/api/materials/${id}`),
 
   bgm: () => http.get('/api/bgm'),
@@ -80,6 +82,18 @@ export const api = {
   createProject: (body) => http.post('/api/projects', body),
   updateProject: (id, body) => http.patch(`/api/projects/${id}`, body),
   generate: (id, body) => http.post(`/api/projects/${id}/generate`, body),
+
+  quoteSheets: () => http.get('/api/quotes'),
+  quoteSheet: (id) => http.get(`/api/quotes/${id}`),
+  importQuote: (source_text) => http.post('/api/quotes', { source_text }),
+  importLatestQuote: () => http.post('/api/quotes/import-latest'),
+  editQuoteEntry: (id, eid, body) => http.patch(`/api/quotes/${id}/entries/${eid}`, body),
+  acknowledgeQuoteCorrection: (id, cid, review_note) => http.post(`/api/quotes/${id}/corrections/${cid}/acknowledge`, { review_note }),
+  confirmQuote: (id, body) => http.post(`/api/quotes/${id}/confirm`, body),
+  previewQuote: (id, category) => http.get(`/api/quotes/${id}/categories/${encodeURIComponent(category)}/preview`),
+  exportQuote: (id, category) => http.post(`/api/quotes/${id}/categories/${encodeURIComponent(category)}/export`, null, { timeout: 0 }),
+  preflightQuotePublish: (id, body) => http.post(`/api/quotes/${id}/publish/preflight`, body),
+  publishQuoteSeries: (id, body) => http.post(`/api/quotes/${id}/publish`, body),
 
   variants: (params) => http.get('/api/variants', { params }),
   variant: (id) => http.get(`/api/variants/${id}`),

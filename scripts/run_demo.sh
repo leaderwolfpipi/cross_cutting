@@ -24,5 +24,5 @@ trap 'kill $API $MOCK 2>/dev/null' EXIT
 until curl -s --noproxy '*' -o /dev/null "http://127.0.0.1:$PORT/health"; do sleep 1; done
 .venv/bin/python scripts/demo_e2e.py --api "http://127.0.0.1:$PORT" --mock "http://127.0.0.1:$MOCK_PORT" \
     --examples "$EXAMPLES" --report data/demo_report.json
-echo "Console: http://127.0.0.1:$PORT (API key dev-key-change-me). Ctrl+C to stop."
+echo "Console: http://127.0.0.1:$PORT (API key louhaokey). Ctrl+C to stop."
 wait $API

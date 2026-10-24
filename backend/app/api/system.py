@@ -18,6 +18,7 @@ from ..media import ffmpeg as F
 from ..models import Account, Delivery, Job, Material, Project, Variant
 from ..render.ffmpeg_backend import FFmpegBackend
 from ..render.jianying import JianyingBackend
+from ..quotes.service import carries_quote
 from ..security import verify_media, verify_page_token
 from . import serializers as S
 
@@ -75,6 +76,14 @@ def jobs(status: str | None = None, queue_name: str | None = None, limit: int = 
     return [S.job(j) for j in db.scalars(q)]
 
 
+@router.get("/api/jobs/{jid}")
+def job_detail(jid: int, db: Session = Depends(get_db)):
+    job = db.get(Job, jid)
+    if job is None:
+        raise HTTPException(404, "job not found")
+    return S.job(job)
+
+
 @router.post("/api/jobs/{jid}/retry")
 def retry_job(jid: int, db: Session = Depends(get_db)):
     j = db.get(Job, jid)
@@ -86,9 +95,13 @@ def retry_job(jid: int, db: Session = Depends(get_db)):
 
 # ---------------------------------------------------------------------- signed media (no API key; HMAC in URL)
 @public.get("/media/{rel:path}")
-def media(rel: str, exp: int, sig: str):
+def media(rel: str, exp: int, sig: str, db: Session = Depends(get_db)):
     if not verify_media(rel, exp, sig):
         raise HTTPException(403, "link expired or invalid")
+    from ..quotes.service import media_allowed
+
+    if not media_allowed(db, rel):
+        raise HTTPException(409, "报价已过期或变动，请更新报价视频")
     try:
         path = get_settings().abs(rel)
     except ValueError as e:
@@ -107,6 +120,12 @@ def mobile_handoff(did: str, t: str, db: Session = Depends(get_db)):
     if d is None:
         raise HTTPException(404, "not found")
     v = db.get(Variant, d.variant_id)
+    if v and carries_quote(v.plan):
+        from ..quotes.service import validate_variant
+
+        reason = validate_variant(db, v)
+        if reason:
+            raise HTTPException(409, f"报价已失效：{reason}")
     e = html.escape
     video = S.signed_media_url(v.file_path, 7 * 86400)
     cover = S.signed_media_url(v.cover_path, 7 * 86400)

@@ -49,7 +49,7 @@ def wait(pred, what: str, timeout: float = 3600, every: float = 3.0):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--api", default="http://127.0.0.1:8010")
-    ap.add_argument("--key", default="dev-key-change-me")
+    ap.add_argument("--key", default="louhaokey")
     ap.add_argument("--examples", required=True)
     ap.add_argument("--mock", default="http://127.0.0.1:9100")
     ap.add_argument("--per-platform", type=int, default=2)

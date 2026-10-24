@@ -15,7 +15,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
-from ..config import get_settings
+from ..config import PLATFORM_SPECS, get_settings
 from ..media import ffmpeg as F
 from .base import Progress, RenderError, RenderResult
 
@@ -36,10 +36,10 @@ XFADE = {
     "wipe_down": "wipedown", "gradient_wipe": "smoothleft",
 }
 LOOKS = {
-    "原图": "", "鲜艳": "eq=saturation=1.28:contrast=1.05", "暖阳": "colorbalance=rs=.06:gs=.02:bs=-.06,eq=saturation=1.1",
-    "清新": "eq=brightness=0.03:saturation=1.08,colorbalance=bs=.03:gs=.01", "冷调": "colorbalance=rs=-.04:bs=.08",
+    "原图": "", "鲜艳": "eq=saturation=1.12:contrast=1.025", "暖阳": "colorbalance=rs=.035:gs=.01:bs=-.035,eq=saturation=1.04",
+    "清新": "eq=brightness=0.015:saturation=1.04,colorbalance=bs=.015", "冷调": "colorbalance=rs=-.025:bs=.035",
     "黑白": "hue=s=0", "复古": "curves=preset=vintage,eq=saturation=0.9", "胶片": "curves=preset=medium_contrast,eq=saturation=0.95",
-    "日系": "eq=brightness=0.04:contrast=0.92:saturation=0.9", "高级灰": "eq=saturation=0.75:contrast=1.05",
+    "日系": "eq=brightness=0.02:contrast=0.96:saturation=0.96", "高级灰": "eq=saturation=0.85:contrast=1.03",
 }
 
 
@@ -93,6 +93,16 @@ def _esc(text: str) -> str:
     return text.replace("\\", "＼").replace("{", "｛").replace("}", "｝").replace("\n", "\\N")
 
 
+def _emphasis(text: str, fill: tuple[int, int, int, int]) -> str:
+    """〖key word〗 → that word in an accent colour that contrasts with the preset's fill."""
+    if fill[3] == 0:  # hollow text has no fill to recolour
+        return text.replace("〖", "").replace("〗", "")
+    yellowish = fill[0] > 200 and fill[1] > 150 and fill[2] < 150
+    accent = (255, 255, 255, 255) if yellowish else (255, 214, 0, 255)
+    colour = lambda rgba: "{\\c&H" + _c(rgba)[4:] + "&}"  # noqa: E731 - \c is &HBBGGRR&, without the alpha byte
+    return text.replace("〖", colour(accent)).replace("〗", colour(fill))
+
+
 def build_ass(texts: list[dict], w: int, h: int) -> str:
     font = cjk_font()
     lines = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {w}", f"PlayResY: {h}", "WrapStyle: 2",
@@ -127,7 +137,7 @@ def build_ass(texts: list[dict], w: int, h: int) -> str:
         if t.get("anim_in") == "pop":
             tags.append("\\fscx40\\fscy40\\t(0,160,\\fscx112\\fscy112)\\t(160,260,\\fscx100\\fscy100)")
         lines.append(f"Dialogue: {10 + i},{_ass_time(start)},{_ass_time(end)},{preset},,0,0,0,,"
-                     f"{{{''.join(tags)}}}{_esc(t['text'])}")
+                     f"{{{''.join(tags)}}}{_emphasis(_esc(t['text']), PRESETS[preset][0])}")
     return "\n".join(lines) + "\n"
 
 
@@ -140,7 +150,8 @@ class FFmpegBackend:
     # ------------------------------------------------------------------ segments
     def _transform(self, c: dict, info: F.ProbeInfo, cw: int, ch: int, dur: float) -> str:
         tr = c.get("transform") or {}
-        look = LOOKS.get((c.get("color") or {}).get("filter", ""), "")
+        color = c.get("color") or {}
+        look = LOOKS.get(color.get("filter", ""), "")
         if c.get("background") == "blur" or tr.get("mode") == "fit":
             chain = (f"split[a][b];[a]scale={cw}:{ch}:force_original_aspect_ratio=increase,crop={cw}:{ch},"
                      f"boxblur=30:3,eq=brightness=-0.08[bg];[b]scale={cw}:{ch}:force_original_aspect_ratio=decrease[fg];"
@@ -160,7 +171,14 @@ class FFmpegBackend:
                 chain = f"scale={iw}:{ih}:flags=bicubic,crop={cw}:{ch}:{xexpr}:{oy:.1f}"
             else:
                 chain = f"scale={iw}:{ih}:flags=bicubic,crop={cw}:{ch}:{ox:.1f}:{oy:.1f}"
-        return chain + (f",{look}" if look else "")
+        grade = [look] if look else []
+        saturation = min(1.15, max(0.85, float(color.get("saturation", 1.0))))
+        temperature = min(0.08, max(-0.08, float(color.get("temperature", 0.0))))
+        if abs(saturation - 1.0) > 0.005:
+            grade.append(f"eq=saturation={saturation:.3f}")
+        if abs(temperature) > 0.005:
+            grade.append(f"colorbalance=rs={temperature:.3f}:bs={-temperature:.3f}")
+        return chain + ("," + ",".join(grade) if grade else "")
 
     def _segment(self, c: dict, head: float, tail: float, dst: Path, cw: int, ch: int, fps: int) -> float:
         src = c["path"]
@@ -246,7 +264,12 @@ class FFmpegBackend:
                "-colorspace", "bt709", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart",
                str(out_video)], timeout=max(900, running * 30), what="assemble")
         cover_t = float(plan.get("cover", {}).get("time", 1.0))
-        F.run([*F.ffmpeg_base(), "-ss", f"{cover_t:.3f}", "-i", str(out_video), "-frames:v", "1", "-q:v", "2",
+        spec = PLATFORM_SPECS.get(plan.get("platform", ""), {})
+        cover_filter = []
+        if spec.get("cover_height") and spec["cover_height"] < ch:
+            cover_filter = ["-vf", f"crop={spec['cover_width']}:{spec['cover_height']}:0:(ih-{spec['cover_height']})/2"]
+        F.run([*F.ffmpeg_base(), "-ss", f"{cover_t:.3f}", "-i", str(out_video), *cover_filter,
+               "-frames:v", "1", "-q:v", "2",
                str(out_cover)], timeout=60, what="cover")
         for s in segs:
             s.unlink(missing_ok=True)

@@ -46,6 +46,7 @@ def variant(v: Variant, full: bool = False) -> dict:
     d = {"id": v.id, "project_id": v.project_id, "platform": v.platform,
          "platform_name": PLATFORM_SPECS.get(v.platform, {}).get("name", v.platform), "seq": v.seq,
          "template_id": v.template_id, "status": v.status, "error": v.error, "copy": v.copywriting,
+         "style": (v.plan or {}).get("style", {}),
          "dedup_decision": v.dedup_decision, "dedup_score": v.dedup_score, "duration": round(v.duration, 2),
          "width": v.width, "height": v.height, "size_bytes": v.size_bytes, "render_backend": v.render_backend,
          "render_seconds": v.render_seconds, "video_url": signed_media_url(v.file_path),
@@ -100,7 +101,22 @@ def batch(b: PublishBatch, deliveries: bool = True) -> dict:
     return d
 
 
+def error_brief(text: str) -> str:
+    """The exception message. A tail slice of the stored traceback starts mid-frame and hides the cause."""
+    if not text:
+        return ""
+    head = text.split("Traceback (most recent call last):", 1)[0].strip()
+    if head:
+        return head.splitlines()[-1][:800]
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for ln in reversed(lines):
+        if ln.startswith("File ") or ln.startswith("^"):
+            continue
+        return ln[:800]
+    return text.strip()[:800]
+
+
 def job(j: Job) -> dict:
     return {"id": j.id, "queue": j.queue, "kind": j.kind, "payload": j.payload, "status": j.status,
-            "attempts": j.attempts, "progress": j.progress, "message": j.message, "last_error": j.last_error[-600:],
+            "attempts": j.attempts, "progress": j.progress, "message": j.message, "last_error": error_brief(j.last_error),
             "run_after": dt(j.run_after), "created_at": dt(j.created_at), "finished_at": dt(j.finished_at)}

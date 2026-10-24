@@ -36,6 +36,7 @@ const menu = [
   { path: '/dashboard', title: '工作台', icon: 'Odometer' },
   { path: '/materials', title: '素材库', icon: 'Film' },
   { path: '/projects', title: '混剪项目', icon: 'MagicStick' },
+  { path: '/quotes', title: '报价系列', icon: 'Tickets' },
   { path: '/dedup', title: '查重中心', icon: 'DocumentChecked', badge: 'review' },
   { path: '/publish', title: '一键发布', icon: 'Promotion', badge: 'operator' },
   { path: '/accounts', title: '平台账号', icon: 'User', badge: 'auth' },

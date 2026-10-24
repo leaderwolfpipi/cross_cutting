@@ -12,8 +12,10 @@ from ..creative.templates import TEMPLATES
 from ..db import get_db, utcnow
 from ..jobs import queue
 from ..models import DedupReport, Delivery, Fingerprint, Material, Project, Variant
+from ..quotes import outro as quote_outro
+from ..quotes import service as quote_service
 from ..security import require_api_key
-from ..services.generate import new_variants
+from ..services.generate import GenerationError, new_variants
 from . import serializers as S
 
 router = APIRouter(tags=["项目与成片"])
@@ -39,7 +41,7 @@ class ProjectIn(BaseModel):
     options: dict = {}  # templates: [...], audio_mode: auto|original|bgm, bgm_ids, duration: [min, max]
 
 
-def _validate(req: ProjectIn, db: Session) -> None:
+def _validate(req: ProjectIn, db: Session) -> dict:
     bad = [p for p in req.platforms if p not in PLATFORM_SPECS]
     if bad:
         raise HTTPException(422, f"unknown platforms {bad}")
@@ -51,19 +53,40 @@ def _validate(req: ProjectIn, db: Session) -> None:
         missing = set(req.material_ids) - found
         if missing:
             raise HTTPException(422, f"unknown materials {sorted(missing)}")
+    options = dict(req.options)
+    sheet_id, entry_id = options.get("quote_sheet_id"), options.get("quote_entry_id")
+    if bool(sheet_id) != bool(entry_id):
+        raise HTTPException(422, "混剪报价需同时选择报价单和报价行")
+    if sheet_id:
+        try:
+            quote = quote_service.mixed_quote(db, sheet_id, entry_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        materials = list(db.scalars(select(Material).where(Material.id.in_(req.material_ids or [""]))))
+        if not any(m.product == quote["product"] for m in materials):
+            raise HTTPException(422, f"所选素材中没有「{quote['product']}」的镜头")
+        placement = options.get("quote_placement", "auto")
+        if placement not in ("auto", "early", "late"):
+            raise HTTPException(422, "报价位置须为 auto、early 或 late")
+        options["quote_revision"] = quote["revision"]
+        options["quote_placement"] = placement
+    else:
+        for key in ("quote_sheet_id", "quote_entry_id", "quote_revision", "quote_placement"):
+            options.pop(key, None)
+    return options
 
 
 @router.get("/api/templates")
 def templates():
     return [{"id": t.id, "name": t.name, "slots": [s.role for s in t.slots], "platform_weight": t.platform_weight}
-            for t in TEMPLATES.values()]
+            for t in TEMPLATES.values() if t.id != "deal_promo"]
 
 
 @router.post("/api/projects")
 def create_project(req: ProjectIn, db: Session = Depends(get_db)):
-    _validate(req, db)
+    options = _validate(req, db)
     p = Project(name=req.name, product=req.product.model_dump(), material_ids=req.material_ids,
-                platforms=req.platforms, options=req.options)
+                platforms=req.platforms, options=options)
     db.add(p)
     db.commit()
     return S.project(p)
@@ -82,9 +105,9 @@ def get_project(pid: str, db: Session = Depends(get_db)):
 @router.patch("/api/projects/{pid}")
 def patch_project(pid: str, req: ProjectIn, db: Session = Depends(get_db)):
     p = db.get(Project, pid) or _404()
-    _validate(req, db)
+    options = _validate(req, db)
     p.name, p.product, p.material_ids = req.name, req.product.model_dump(), req.material_ids
-    p.platforms, p.options = req.platforms, req.options
+    p.platforms, p.options = req.platforms, options
     db.commit()
     return S.project(p)
 
@@ -97,19 +120,35 @@ class GenerateReq(BaseModel):
 @router.post("/api/projects/{pid}/generate")
 def generate(pid: str, req: GenerateReq, db: Session = Depends(get_db)):
     p = db.get(Project, pid) or _404()
+    active = db.scalar(select(Variant.id).where(Variant.project_id == p.id, Variant.status.in_(
+        ("queued", "planning", "rendering", "checking"))))
+    if active:
+        raise HTTPException(409, "该项目仍有成片在生成；请等当前批次完成后再开始下一批")
+    if p.options.get("quote_sheet_id"):
+        try:
+            quote_service.mixed_quote(db, p.options["quote_sheet_id"], p.options.get("quote_entry_id", ""),
+                                      p.options.get("quote_revision", ""))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+    if get_settings().quote_outro_required and quote_outro.today_sheet(db) is None:
+        raise HTTPException(409, f"{quote_service.today()} 的报价单尚未导入或确认；混剪片尾必须贴当日报价，请先在报价页确认")
     platforms = req.platforms or p.platforms
     ready = db.scalar(select(Material.id).where(Material.id.in_(p.material_ids or [""]), Material.status == "ready"))
     if not ready:
         raise HTTPException(409, "项目素材尚未分析完成（或未选择素材）")
     try:
         variants = new_variants(db, p, platforms, req.count)
-    except ValueError as e:
+    except (ValueError, GenerationError) as e:
         raise HTTPException(422, str(e)) from e
     p.status = "generating"
-    for platform in platforms:
-        ids = [v.id for v in variants if v.platform == platform]
-        queue.enqueue(db, "render", "generate_variants", {"project_id": p.id, "platform": platform, "variant_ids": ids},
-                      max_attempts=2, commit=False)
+    # One ordered job per project: the next platform sees the previous variant's
+    # committed plan and fingerprint before it chooses footage from the same pool.
+    job = queue.enqueue(db, "render", "generate_variants", {"project_id": p.id,
+                        "variant_ids": [v.id for v in variants]}, dedupe_key=f"generate:{p.id}",
+                        max_attempts=2, commit=False)
+    if job is None:
+        db.rollback()
+        raise HTTPException(409, "该项目已有生成任务在运行")
     db.commit()
     return {"project": S.project(p), "variants": [S.variant(v) for v in variants]}
 
@@ -147,6 +186,8 @@ class CopyPatch(BaseModel):
 @router.patch("/api/variants/{vid}")
 def patch_variant(vid: str, req: CopyPatch, db: Session = Depends(get_db)):
     v = db.get(Variant, vid) or _404()
+    if (v.plan or {}).get("quote"):
+        raise HTTPException(409, "报价成片的配文已与核实快照绑定；修改报价请重新生成")
     c = dict(v.copywriting or {})
     for k in ("title", "description", "hashtags"):
         if getattr(req, k) is not None:

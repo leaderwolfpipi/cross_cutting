@@ -6,9 +6,10 @@ import random
 
 from app.creative import lint, textfit
 from app.creative.copywriter import CopyRequest, ProductInfo, TemplateCopywriter
-from app.creative.planner import MaterialView, PlanInput, plan
+from app.creative.planner import MaterialView, PlanInput, _sample, plan
 from app.creative.templates import TEMPLATES
-from app.dedup.provenance import UsageLedger, footprint, reuse
+from app.config import PLATFORM_SPECS
+from app.dedup.provenance import UsageLedger, footprint, opening_reuse, reuse
 
 
 def test_textfit_keeps_lines_inside_canvas():
@@ -76,3 +77,93 @@ def test_freshness_steers_away_from_used_footage():
     second = plan(PlanInput("douyin", TEMPLATES["hook_reveal"], mats, ProductInfo(), 12, led))
     naive = plan(PlanInput("douyin", TEMPLATES["hook_reveal"], mats, ProductInfo(), 12, UsageLedger()))
     assert reuse(second, footprint(first)) < reuse(naive, footprint(first)) or reuse(second, footprint(first)) < 0.35
+
+
+def test_window_sampling_does_not_hide_other_source_groups():
+    a, b = _materials(2)
+    candidates = [(1.0, a, i * 0.25, i * 0.25 + 2.0) for i in range(100)]
+    candidates += [(0.95, b, 0.0, 2.0)]
+    selected = {_sample(candidates, random.Random(seed))[1].source_group for seed in range(30)}
+    assert selected == {a.source_group, b.source_group}
+
+
+def test_opening_overlap_detects_a_reused_hook_even_when_full_edits_differ():
+    def clip(group, start):
+        return {"source_group": group, "src_in": start, "src_out": start + 3, "out_duration": 3}
+
+    first = {"clips": [clip("hook", 0), clip("body_a", 0)]}
+    second = {"clips": [clip("hook", 0), clip("body_b", 0)]}
+    assert reuse(second, footprint(first)) == 0.5
+    assert opening_reuse(second, first) == 1.0
+
+
+def test_style_rotation_changes_visible_choices_and_platform_canvas():
+    inp = PlanInput("xiaohongshu", TEMPLATES["hook_reveal"], _materials(), ProductInfo(items=["东星斑"]),
+                    31, UsageLedger())
+    first = plan(inp)
+    inp.avoid_styles.add(first["style"]["key"])
+    second = plan(inp)
+    assert first["style"]["key"] != second["style"]["key"]
+    assert first["canvas"]["width"] == 1080 and first["canvas"]["height"] == 1920
+    assert (PLATFORM_SPECS["xiaohongshu"]["cover_width"],
+            PLATFORM_SPECS["xiaohongshu"]["cover_height"]) == (1080, 1920)
+    assert first["texts"][0]["preset"] == first["style"]["hook_preset"]
+    assert all(t["style"]["position_y"] <= 0.73 for t in first["texts"] if t["role"] == "caption")
+    assert all(not c["transition_out"] or c["transition_out"]["kind"] in
+               {"cross_dissolve", "dissolve", "dip_to_black", "cam_left", "cam_right", "cam_up",
+                "cam_down", "push_left", "push_right", "zoom_in"} for c in first["clips"])
+
+
+def test_verified_quote_has_readable_early_or_late_reveal():
+    quote = {"product": "东星斑", "spec": "1.0-1.5", "price": 88.0, "unit": "元/斤",
+             "quote_date": "2026-10-24", "supplier": "测试供应商", "placement": "early"}
+    inp = PlanInput("douyin", TEMPLATES["hook_reveal"], _materials(), ProductInfo(items=["东星斑"]),
+                    52, UsageLedger(), quote=quote)
+    early = plan(inp)
+    full = next(t for t in early["texts"] if t["role"] == "price")
+    assert "88 元/斤" in full["text"] and full["duration"] >= 2.2
+    assert "88.0" not in full["text"]
+    assert full["start"] < early["duration"] / 2
+    assert "88 元/斤" in early["copy"]["description"]
+    assert early["quote"]["copy"]["description"] == early["copy"]["description"]
+    assert all(t["role"] not in ("caption", "label", "cta") or
+               t["start"] + t["duration"] <= full["start"] or
+               t["start"] >= full["start"] + full["duration"] for t in early["texts"])
+    assert len(next(t for t in early["texts"] if t["role"] == "price_source")["text"].splitlines()) <= 2
+    inp.quote = {**quote, "placement": "late"}
+    late = plan(inp)
+    assert any(t["role"] == "price_preview" for t in late["texts"])
+    assert next(t for t in late["texts"] if t["role"] == "price")["start"] > late["duration"] / 2
+    assert not any(t["role"] == "cta" for t in late["texts"])
+
+
+def test_long_supplier_does_not_make_a_three_line_price_footer():
+    quote = {"product": "东星斑", "spec": "1.0-1.5", "price": 88, "unit": "元/斤",
+             "quote_date": "2026-10-24", "supplier": "华东地区测试供应商海鲜批发有限公司今日报价中心", "placement": "early"}
+    result = plan(PlanInput("douyin", TEMPLATES["hook_reveal"], _materials(),
+                            ProductInfo(items=["东星斑"]), 53, UsageLedger(), quote=quote))
+    footer = next(t for t in result["texts"] if t["role"] == "price_source")
+    assert len(footer["text"].splitlines()) <= 2
+    assert quote["supplier"] in result["copy"]["description"]
+
+
+def test_batch_reserves_distinct_narratives_across_platforms(settings):
+    from app.db import SessionLocal
+    from app.models import Project
+    from app.services.generate import new_variants
+
+    with SessionLocal() as db:
+        project = Project(name="跨平台叙事轮换", product={}, material_ids=[],
+                          platforms=["douyin", "kuaishou", "channels", "xiaohongshu"], options={})
+        db.add(project)
+        db.flush()
+        variants = new_variants(db, project, project.platforms, 2)
+        assert len({v.template_id for v in variants[:4]}) == 4
+        assert len({v.plan_report["reserved_style"]["key"] for v in variants}) == len(variants)
+        for platform in project.platforms:
+            pair = [v for v in variants if v.platform == platform]
+            assert pair[0].template_id != pair[1].template_id
+            styles = [v.plan_report["reserved_style"] for v in pair]
+            assert styles[0]["look"] != styles[1]["look"]
+            assert styles[0]["rhythm"] != styles[1]["rhythm"]
+        db.rollback()

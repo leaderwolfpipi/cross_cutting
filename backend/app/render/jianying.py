@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..config import get_settings
+from ..config import PLATFORM_SPECS, get_settings
 from ..media import ffmpeg as F
 from .base import Progress, RenderError, RenderResult
 
@@ -168,7 +168,12 @@ class JianyingBackend:
             mcp.call("render_frame", time=float(plan.get("cover", {}).get("time", 1.0)),
                      width=int(canvas["width"]), save_path=str(png))
             out_cover.parent.mkdir(parents=True, exist_ok=True)
-            F.run([*F.ffmpeg_base(), "-i", str(png), "-q:v", "2", str(out_cover)], timeout=60, what="cover")
+            spec = PLATFORM_SPECS.get(plan.get("platform", ""), {})
+            cover_filter = []
+            if spec.get("cover_height") and spec["cover_height"] < int(canvas["height"]):
+                cover_filter = ["-vf", f"crop={spec['cover_width']}:{spec['cover_height']}:0:(ih-{spec['cover_height']})/2"]
+            F.run([*F.ffmpeg_base(), "-i", str(png), *cover_filter, "-q:v", "2", str(out_cover)],
+                  timeout=60, what="cover")
             png.unlink(missing_ok=True)
             mcp.call("close_project")
         finally:
@@ -224,7 +229,7 @@ def build_timeline(mcp: McpClient, plan: dict, proj_path: Path, warnings: list[s
             except RenderError as e:  # e.g. clip too short after speed change: keep the hard cut
                 warnings.append(f"transition {tr['kind']} skipped: {e}")
     for t in plan.get("texts", []):
-        mcp.call("add_text", text=t["text"], start=t["start"], duration=t["duration"], preset=t.get("preset"),
+        mcp.call("add_text", text=t["text"].replace("〖", "").replace("〗", ""), start=t["start"], duration=t["duration"], preset=t.get("preset"),
                  style=t.get("style") or {}, anim_in=t.get("anim_in"), anim_out=t.get("anim_out"))
     if bgm:
         total = sum(c["out_duration"] for c in clips)

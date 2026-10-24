@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import random
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -58,6 +59,12 @@ def circuit_open(db: Session, platform: str) -> datetime | None:
     return c.open_until if c and c.open_until and c.open_until > utcnow() else None
 
 
+def _carries_quote(v: Variant) -> bool:
+    from ..quotes.service import carries_quote
+
+    return carries_quote(v.plan)
+
+
 def preflight_target(db: Session, v: Variant, acc: Account | None, copy: dict, pending: dict[str, int]) -> list[dict]:
     s = get_settings()
     spec = PLATFORM_SPECS[v.platform]
@@ -78,6 +85,21 @@ def preflight_target(db: Session, v: Variant, acc: Account | None, copy: dict, p
     bad = [m.filename for m in db.scalars(select(Material).where(Material.id.in_(mats or {""}))) if not m.publishable]
     checks.append(_chk("license", not bad, "素材授权可发布" if not bad else f"素材未授权/已拉黑：{', '.join(bad)}"))
     title, desc = copy.get("title", ""), copy.get("description", "")
+    price_text = "\n".join([title, desc, *((t.get("text") or "") for t in (v.plan or {}).get("texts", []))])
+    has_price_claim = bool(re.search(r"[¥￥]\s*\d|\d+(?:\.\d+)?\s*元|今日价|福利价|到港价|到店价", price_text))
+    verified_quote = bool((v.plan or {}).get("quote"))
+    checks.append(_chk("unverified_price", not has_price_claim or verified_quote,
+                       "报价已关联已核实快照" if verified_quote else
+                       "混剪内容未含报价" if not has_price_claim else "混剪含未核实的价格表述，请关联当天报价并重新生成"))
+    from ..quotes.service import carries_quote, validate_variant
+
+    if carries_quote(v.plan):
+        quote_error = validate_variant(db, v)
+        checks.append(_chk("quote_snapshot", not quote_error, quote_error or "报价日期和版本已核对"))
+    if verified_quote:
+        expected_copy = (v.plan or {}).get("quote", {}).get("copy")
+        checks.append(_chk("quote_copy", copy == expected_copy,
+                           "配文与报价快照一致" if copy == expected_copy else "报价配文已改动，请重新生成并核对"))
     hits = lint.lint(f"{title}\n{desc}")
     checks.append(_chk("ad_law", not hits, "文案合规" if not hits else
                        "广告法风险词：" + "、".join(sorted({h['match'] for h in hits}))))
@@ -264,12 +286,22 @@ def step(delivery_id: str) -> None:
         d = db.get(Delivery, delivery_id)
         if d is None or d.state in Delivery.TERMINAL or d.state in WAITING:
             return
+        v, acc = db.get(Variant, d.variant_id), db.get(Account, d.account_id)
+        if v and _carries_quote(v):
+            from ..quotes.service import validate_variant
+
+            quote_error = validate_variant(db, v)
+            if quote_error and d.state in ("queued", "uploading", "uploaded"):
+                d.last_error, d.error_class = quote_error, "expired_quote"
+                transition(db, d, "failed", f"报价核验失败：{quote_error}")
+                db.commit()
+                _finish_batch(db, d.batch_id)
+                return
         if d.scheduled_at and d.scheduled_at > utcnow():
             raise queue.Retry((d.scheduled_at - utcnow()).total_seconds())
         opened = circuit_open(db, d.platform)
         if opened:
             raise queue.Retry((opened - utcnow()).total_seconds() + random.uniform(1, 10), "circuit open")
-        v, acc = db.get(Variant, d.variant_id), db.get(Account, d.account_id)
         ad = registry.adapter(d.platform)
         if acc.status != "active":
             transition(db, d, "needs_auth", f"账号状态 {acc.status}")
@@ -294,6 +326,16 @@ def step(delivery_id: str) -> None:
                     transition(db, d, "uploaded", "上传完成", {"checkpoint": d.checkpoint})
                     db.commit()
                 elif d.state == "uploaded":
+                    if _carries_quote(v):
+                        from ..quotes.service import validate_variant
+
+                        latest_error = validate_variant(db, v)
+                        if latest_error:
+                            d.last_error, d.error_class = latest_error, "expired_quote"
+                            transition(db, d, "failed", f"提交前报价核验失败：{latest_error}")
+                            db.commit()
+                            _finish_batch(db, d.batch_id)
+                            return
                     # persist intent BEFORE the non-idempotent call: a crash here is detected as 'creating' on restart
                     d.checkpoint = {**d.checkpoint, "create_started": utcnow().isoformat()}
                     transition(db, d, "creating", "提交发布")
@@ -311,6 +353,16 @@ def step(delivery_id: str) -> None:
                 elif d.state == "create_unknown":
                     if _reconcile(db, d, ad, ctx):
                         continue
+                    if _carries_quote(v):
+                        from ..quotes.service import validate_variant
+
+                        expired = validate_variant(db, v)
+                        if expired:
+                            d.last_error, d.error_class = expired, "expired_quote"
+                            transition(db, d, "failed", f"提交结果不明且报价已失效，请人工核对平台：{expired}")
+                            db.commit()
+                            _finish_batch(db, d.batch_id)
+                            return
                     started = datetime.fromisoformat(d.checkpoint.get("create_started", utcnow().isoformat()))
                     if (utcnow() - started).total_seconds() < s.publish_reconcile_grace_s:
                         db.commit()
@@ -411,6 +463,13 @@ def _finish_batch(db: Session, batch_id: str) -> None:
 def confirm_manual(db: Session, d: Delivery, post_url: str, operator: str) -> None:
     if d.state != "awaiting_operator":
         raise ValueError(f"delivery is {d.state}, not awaiting an operator")
+    v = db.get(Variant, d.variant_id)
+    if v and _carries_quote(v):
+        from ..quotes.service import validate_variant
+
+        error = validate_variant(db, v)
+        if error:
+            raise ValueError(f"报价已失效：{error}")
     d.share_url, d.operator, d.published_at = post_url, operator, utcnow()
     transition(db, d, "published", f"{operator} 确认已在平台发布", {"post_url": post_url})
     db.commit()
@@ -420,6 +479,13 @@ def confirm_manual(db: Session, d: Delivery, post_url: str, operator: str) -> No
 def retry(db: Session, d: Delivery) -> None:
     if d.state not in ("failed", "needs_auth", "platform_rejected", "submitted"):
         raise ValueError(f"cannot retry a delivery in state {d.state}")
+    v = db.get(Variant, d.variant_id)
+    if v and _carries_quote(v):
+        from ..quotes.service import validate_variant
+
+        error = validate_variant(db, v)
+        if error:
+            raise ValueError(f"报价已失效：{error}")
     if d.state == "needs_auth":
         acc = db.get(Account, d.account_id)
         if acc.status != "active":

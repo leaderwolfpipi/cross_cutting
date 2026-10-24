@@ -8,6 +8,7 @@ const routes = [
   { path: '/materials', component: () => import('@/views/Materials.vue'), meta: { title: '素材库' } },
   { path: '/projects', component: () => import('@/views/Projects.vue'), meta: { title: '混剪项目' } },
   { path: '/projects/:id', component: () => import('@/views/ProjectDetail.vue'), meta: { title: '项目详情' } },
+  { path: '/quotes', component: () => import('@/views/Quotes.vue'), meta: { title: '全规格报价系列' } },
   { path: '/dedup', component: () => import('@/views/Dedup.vue'), meta: { title: '查重中心' } },
   { path: '/publish', component: () => import('@/views/Publish.vue'), meta: { title: '一键发布' } },
   { path: '/accounts', component: () => import('@/views/Accounts.vue'), meta: { title: '平台账号' } },
